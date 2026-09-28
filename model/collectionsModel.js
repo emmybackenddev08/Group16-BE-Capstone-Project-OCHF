@@ -133,7 +133,7 @@ const propertySchema = new Schema(
     address: { type: String, required: true },
     location: { type: pointSchema, required: true }, // GeoJSON Point,
     amenities: { type:String, default:[]},
-    propertyType: { type: String, enum: ['room', 'self_contain', 'shared', 'apartment', 'hostel'] },
+    propertyType: { type: [String], enum: ['room', 'self_contain', 'shared', 'apartment', 'hostel'] },
     availabilityStatus: {
       type: String,
       enum: ['available', 'unavailable', 'booked'],
