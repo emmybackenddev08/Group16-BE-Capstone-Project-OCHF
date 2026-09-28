@@ -127,11 +127,12 @@ const propertySchema = new Schema(
     providerId: { type: Schema.Types.ObjectId, ref: 'ProviderProfile', required: true },
     title: { type: String, required: true },
     description: String,
-    price: { type: Number, required: true },
+    rent: { type: Number, required: true, min:0 },
     additionalCharges: [chargeSchema],
     photos: [photoSchema],
     address: { type: String, required: true },
-    location: { type: pointSchema, required: true }, // GeoJSON Point
+    location: { type: pointSchema, required: true }, // GeoJSON Point,
+    amenities: { type:String, default:[]},
     availabilityStatus: {
       type: String,
       enum: ['available', 'unavailable', 'booked'],
