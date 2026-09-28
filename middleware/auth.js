@@ -51,6 +51,9 @@ async function optionalProtect(req, res, next) {
       // If token is invalid or expired, we just don't attach req.user (proceed to logout)
       next();
     }
+  } else {
+    // No token at all: guest access, continue without req.user
+    next();
   }
 }
 module.exports = { protect, authorize, optionalProtect };

@@ -32,6 +32,8 @@ const estimateDrivingMinutes = (km) =>
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // --------------------------------------------------------------------------
 
+const PROPERTY_TYPES = ['room', 'self_contain', 'shared', 'apartment', 'hostel']; // keep in sync with the model enum
+
 // POST /properties  (protected, provider only)
 // body: { title, description, price, additionalCharges[], photos[], amenities[],
 //         address, latitude, longitude }
@@ -44,8 +46,12 @@ async function createProperty(req, res) {
 
     const {
       title, description, price, additionalCharges, photos, amenities,
-      address, latitude, longitude,
+      address, latitude, longitude, propertyType,
     } = req.body;
+
+    if (propertyType !== undefined && !PROPERTY_TYPES.includes(propertyType)) {
+      return res.status(400).json({ message: `propertyType must be one of: ${PROPERTY_TYPES.join(', ')}` });
+    }
 
     if (!title || !price || !address || latitude == null || longitude == null) {
       return res.status(400).json({
@@ -56,6 +62,7 @@ async function createProperty(req, res) {
     const property = await Property.create({
       providerId: provider._id,
       title,
+      propertyType,
       description,
       price,
       additionalCharges: additionalCharges || [],
@@ -73,7 +80,8 @@ async function createProperty(req, res) {
 }
 
 // GET /properties  (public — student browse/search)
-// query: minPrice, maxPrice, schoolId, maxDistanceKm, q, sort, page, limit
+// query: minPrice, maxPrice, location, propertyType, amenities, availability,
+//        schoolId, maxDistanceKm, q, sort, page, limit (filters combine with AND)
 // Only ever returns verified + available listings — pending/rejected/unavailable
 // properties never show up in public search, regardless of filters passed.
 // With ?schoolId= each card also gets distanceKm + drivingTimeMinutes.
@@ -81,7 +89,7 @@ async function createProperty(req, res) {
 // only shown on the detail page to logged-in users).
 async function getProperties(req, res) {
   try {
-    const { minPrice, maxPrice, schoolId, maxDistanceKm, q, sort } = req.query;
+    const { minPrice, maxPrice, schoolId, maxDistanceKm, q, sort, amenities, location, propertyType, availability } = req.query;
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
 
@@ -105,7 +113,34 @@ async function getProperties(req, res) {
     // Keyword search: regex (not $text) because $text can't be combined with $near
     if (q && q.trim()) {
       const rx = new RegExp(escapeRegex(q.trim()), 'i');
-      filter.$or = [{ title: rx }, { description: rx }];
+      filter.$or = [{ title: rx }, { description: rx }, { address: rx }];
+    }
+
+    // Amenities filter (US-01): ?amenities=wifi,water — every listed amenity must match
+    if (typeof amenities === 'string' && amenities.trim()) {
+      const list = amenities.split(',').map((a) => a.trim()).filter(Boolean);
+      if (list.length) filter.$and = list.map((a) => ({ amenities: new RegExp(escapeRegex(a), 'i') }));
+    }
+
+    // Location filter (US-04): text match on the address, e.g. ?location=Yaba
+    if (typeof location === 'string' && location.trim()) {
+      filter.address = new RegExp(escapeRegex(location.trim()), 'i');
+    }
+
+    // Property type filter (US-04)
+    if (propertyType !== undefined) {
+      if (typeof propertyType !== 'string' || !PROPERTY_TYPES.includes(propertyType)) {
+        return res.status(400).json({ message: `propertyType must be one of: ${PROPERTY_TYPES.join(', ')}` });
+      }
+      filter.propertyType = propertyType;
+    }
+
+    // Availability filter (US-04) — defaults to 'available'; 'unavailable' listings are never public
+    if (availability !== undefined) {
+      if (!['available', 'booked'].includes(availability)) {
+        return res.status(400).json({ message: 'availability must be available or booked' });
+      }
+      filter.availabilityStatus = availability;
     }
 
     // Geo search: properties within maxDistanceKm of the selected school
@@ -129,7 +164,7 @@ async function getProperties(req, res) {
     }
 
     let query = Property.find(filter)
-      .select('title price address location photos amenities availabilityStatus verificationStatus createdAt providerId')
+      .select('title propertyType price address location photos amenities availabilityStatus verificationStatus createdAt providerId')
       .populate('providerId', 'businessName verificationStatus');
 
     // $near already returns nearest-first and can't be combined with an
@@ -242,10 +277,15 @@ async function updateProperty(req, res) {
 
     const {
       title, description, price, additionalCharges, photos, amenities,
-      address, latitude, longitude, availabilityStatus,
+      address, latitude, longitude, availabilityStatus, propertyType,
     } = req.body;
 
+    if (propertyType !== undefined && !PROPERTY_TYPES.includes(propertyType)) {
+      return res.status(400).json({ message: `propertyType must be one of: ${PROPERTY_TYPES.join(', ')}` });
+    }
+
     if (title !== undefined) property.title = title;
+    if (propertyType !== undefined) property.propertyType = propertyType;
     if (description !== undefined) property.description = description;
     if (price !== undefined) property.price = price;
     if (additionalCharges !== undefined) property.additionalCharges = additionalCharges;
@@ -260,7 +300,7 @@ async function updateProperty(req, res) {
     // Edits to listing details send a verified listing back to pending for
     // re-review. Changing only availability (e.g. marking it booked) does not.
     const detailsChanged = [
-      title, description, price, additionalCharges, photos, amenities, address, latitude, longitude,
+      title, description, price, additionalCharges, photos, amenities, address, latitude, longitude, propertyType,
     ].some((v) => v !== undefined);
     if (detailsChanged && property.verificationStatus === 'verified') {
       property.verificationStatus = 'pending';
