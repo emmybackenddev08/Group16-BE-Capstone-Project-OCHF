@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { Property, ProviderProfile, School } = require('../model/collectionsModel');
+const { Property, ProviderProfile, StudentProfile, School } = require('../model/collectionsModel');
 
 // Helper: fetch the ProviderProfile for the logged-in user
 async function getProviderProfile(userId) {
@@ -32,11 +32,36 @@ const estimateDrivingMinutes = (km) =>
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // --------------------------------------------------------------------------
 
+const AVAILABILITY_STATUSES = ['available', 'unavailable', 'booked']; // keep in sync with the model enum
+
+// Turns ["wifi","water"] or "wifi, water" into a clean string array.
+// Returns undefined when not supplied, null when the value is invalid.
+function normalizeAmenities(input) {
+  if (input === undefined) return undefined;
+  const list = Array.isArray(input) ? input : typeof input === 'string' ? input.split(',') : null;
+  if (!list || list.some((a) => typeof a !== 'string')) return null;
+  return list.map((a) => a.trim()).filter(Boolean);
+}
+
+// Distance + estimated driving time from a school to a [lng, lat] pair.
+function schoolMetrics(school, lng, lat) {
+  const [sLng, sLat] = school.location.coordinates;
+  const distanceKm = Number(haversineKm(lat, lng, sLat, sLng).toFixed(2));
+  return { distanceFromSchoolKm: distanceKm, drivingTimeMinutes: estimateDrivingMinutes(distanceKm) };
+}
+
+const validCoords = (lat, lng) =>
+  Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+
 const PROPERTY_TYPES = ['room', 'self_contain', 'shared', 'apartment', 'hostel']; // keep in sync with the model enum
 
 // POST /properties  (protected, provider only)
-// body: { title, description, price, additionalCharges[], photos[], amenities[],
-//         address, latitude, longitude }
+// US-14 mandatory: title (property name), address (location), schoolId, price
+// (monthly rent), latitude, longitude. Distance from school and estimated
+// driving time are computed server-side and stored. availabilityStatus is
+// optional (defaults to 'available'). Amenities/charges/photos are optional.
+// body: { title, description, price, schoolId, additionalCharges[], photos[],
+//         amenities[], address, latitude, longitude, propertyType, availabilityStatus }
 async function createProperty(req, res) {
   try {
     const provider = await getProviderProfile(req.user._id);
@@ -46,17 +71,45 @@ async function createProperty(req, res) {
 
     const {
       title, description, price, additionalCharges, photos, amenities,
-      address, latitude, longitude, propertyType,
+      address, latitude, longitude, propertyType, schoolId, availabilityStatus,
     } = req.body;
+
+    if (!title || price == null || price === '' || !address || latitude == null || longitude == null || !schoolId) {
+      return res.status(400).json({
+        message: 'title, price, address, schoolId, latitude and longitude are required',
+      });
+    }
+
+    const rent = Number(price);
+    if (!Number.isFinite(rent) || rent <= 0) {
+      return res.status(400).json({ message: 'price must be a positive number' });
+    }
+
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (!validCoords(lat, lng)) {
+      return res.status(400).json({ message: 'latitude/longitude are invalid' });
+    }
 
     if (propertyType !== undefined && !PROPERTY_TYPES.includes(propertyType)) {
       return res.status(400).json({ message: `propertyType must be one of: ${PROPERTY_TYPES.join(', ')}` });
     }
 
-    if (!title || !price || !address || latitude == null || longitude == null) {
-      return res.status(400).json({
-        message: 'title, price, address, latitude and longitude are required',
-      });
+    if (availabilityStatus !== undefined && !['available', 'unavailable'].includes(availabilityStatus)) {
+      return res.status(400).json({ message: 'availabilityStatus must be available or unavailable' });
+    }
+
+    const cleanAmenities = normalizeAmenities(amenities);
+    if (cleanAmenities === null) {
+      return res.status(400).json({ message: 'amenities must be an array of strings' });
+    }
+
+    if (!mongoose.isValidObjectId(schoolId)) {
+      return res.status(400).json({ message: 'Invalid schoolId' });
+    }
+    const school = await School.findById(schoolId);
+    if (!school) {
+      return res.status(404).json({ message: 'School not found' });
     }
 
     const property = await Property.create({
@@ -64,13 +117,16 @@ async function createProperty(req, res) {
       title,
       propertyType,
       description,
-      price,
+      price: rent,
       additionalCharges: additionalCharges || [],
       photos: photos || [],
-      amenities: amenities || [],
+      amenities: cleanAmenities || [],
       address,
-      location: { type: 'Point', coordinates: [longitude, latitude] },
-      // availabilityStatus and verificationStatus default from the schema
+      location: { type: 'Point', coordinates: [lng, lat] },
+      schoolId: school._id,
+      ...schoolMetrics(school, lng, lat),
+      ...(availabilityStatus ? { availabilityStatus } : {}),
+      // verificationStatus defaults to 'pending' — goes to the admin queue (US-17)
     });
 
     return res.status(201).json({ property });
@@ -85,8 +141,9 @@ async function createProperty(req, res) {
 // Only ever returns verified + available listings — pending/rejected/unavailable
 // properties never show up in public search, regardless of filters passed.
 // With ?schoolId= each card also gets distanceKm + drivingTimeMinutes.
-// Provider phone is intentionally NOT populated here (contact details are
-// only shown on the detail page to logged-in users).
+// Provider name and phone are intentionally NOT populated here — provider
+// details are protected (US-11/US-12) and only appear on the detail page for
+// verified students. The phone is never sent to students at all.
 async function getProperties(req, res) {
   try {
     const { minPrice, maxPrice, schoolId, maxDistanceKm, q, sort, amenities, location, propertyType, availability } = req.query;
@@ -164,8 +221,8 @@ async function getProperties(req, res) {
     }
 
     let query = Property.find(filter)
-      .select('title propertyType price address location photos amenities availabilityStatus verificationStatus createdAt providerId')
-      .populate('providerId', 'businessName verificationStatus');
+      .select('title propertyType price address location photos amenities availabilityStatus verificationStatus createdAt providerId schoolId distanceFromSchoolKm drivingTimeMinutes')
+      .populate('providerId', 'verificationStatus');
 
     // $near already returns nearest-first and can't be combined with an
     // explicit sort — so `sort` only applies when there's no school filter.
@@ -215,49 +272,79 @@ async function getMyProperties(req, res) {
 }
 
 // GET /properties/:id  (public, with optional auth)
-// Only exposes verified listings to the public, UNLESS the requester is the
-// owning provider (so a provider can preview their own pending listing).
-// Populates the provider's verification status, and — if ?schoolId= is
-// passed — computes the distance (km) and estimated driving time from that school.
-// The provider's phone number is only included when the requester is logged in
-// (req.user is set by an optional-auth middleware on this route).
+// Public info (name, rent, address, availability, verification status,
+// description, photos, amenities, distance) is visible to everyone.
+// PROTECTED info (US-11 / US-12):
+//   - landlord/business name: verified students, the owning provider, admins
+//   - landlord phone: owning provider and admins ONLY — never students/guests
+// Non-verified listings are only visible to their owner and admins.
+// ?schoolId= overrides the stored distance/driving time with one measured
+// from that school.
 async function getPropertyById(req, res) {
   try {
-    // Guests don't get the provider's phone number
-    const providerFields = req.user
-      ? 'businessName phone verificationStatus'
-      : 'businessName verificationStatus';
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      return res.status(404).json({ message: 'Property not found' });
+    }
 
     const property = await Property.findById(req.params.id).populate(
       'providerId',
-      providerFields
+      'businessName phone verificationStatus userId'
     );
     if (!property) {
       return res.status(404).json({ message: 'Property not found' });
     }
 
-    if (property.verificationStatus !== 'verified') {
-      const provider = req.user ? await getProviderProfile(req.user._id) : null;
-      const isOwner = provider && provider._id.equals(property.providerId?._id);
-      if (!isOwner) {
-        return res.status(404).json({ message: 'Property not found' });
-      }
+    const provider = property.providerId; // populated doc, or null if orphaned
+    const isAdmin = req.user?.role === 'admin';
+    const isOwner = !!(req.user && provider?.userId && provider.userId.equals(req.user._id));
+
+    if (property.verificationStatus !== 'verified' && !isOwner && !isAdmin) {
+      return res.status(404).json({ message: 'Property not found' });
     }
 
-    let distanceKm = null;
-    let drivingTimeMinutes = null;
+    let studentVerified = false;
+    if (req.user?.role === 'student') {
+      const sp = await StudentProfile.findOne({ userId: req.user._id }).select('verificationStatus');
+      studentVerified = sp?.verificationStatus === 'verified';
+    }
+
+    const canSeeProvider = isOwner || isAdmin || studentVerified;
+    const canSeePhone = isOwner || isAdmin; // never students or guests
+
+    let lockReason = null;
+    if (!canSeeProvider) {
+      if (!req.user) lockReason = 'login_required';
+      else if (req.user.role === 'student') lockReason = 'verification_required';
+      else lockReason = 'not_permitted';
+    }
+
+    const out = property.toObject();
+    out.photos = [...(out.photos || [])].sort((a, b) => a.order - b.order);
+    if (provider) {
+      out.providerId = { _id: provider._id, verificationStatus: provider.verificationStatus };
+      if (canSeeProvider) out.providerId.businessName = provider.businessName;
+      if (canSeePhone) out.providerId.phone = provider.phone;
+    }
+
+    let distanceKm = out.distanceFromSchoolKm ?? null;
+    let drivingTimeMinutes = out.drivingTimeMinutes ?? null;
     const { schoolId } = req.query;
     if (schoolId && mongoose.isValidObjectId(schoolId)) {
       const school = await School.findById(schoolId);
       if (school) {
         const [propLng, propLat] = property.location.coordinates;
-        const [schoolLng, schoolLat] = school.location.coordinates;
-        distanceKm = Number(haversineKm(propLat, propLng, schoolLat, schoolLng).toFixed(2));
-        drivingTimeMinutes = estimateDrivingMinutes(distanceKm);
+        const m = schoolMetrics(school, propLng, propLat);
+        distanceKm = m.distanceFromSchoolKm;
+        drivingTimeMinutes = m.drivingTimeMinutes;
       }
     }
 
-    return res.json({ property, distanceKm, drivingTimeMinutes });
+    return res.json({
+      property: out,
+      distanceKm,
+      drivingTimeMinutes,
+      protectedInfo: { unlocked: canSeeProvider, reason: lockReason },
+    });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to fetch property', error: err.message });
   }
@@ -277,32 +364,65 @@ async function updateProperty(req, res) {
 
     const {
       title, description, price, additionalCharges, photos, amenities,
-      address, latitude, longitude, availabilityStatus, propertyType,
+      address, latitude, longitude, availabilityStatus, propertyType, schoolId,
     } = req.body;
 
     if (propertyType !== undefined && !PROPERTY_TYPES.includes(propertyType)) {
       return res.status(400).json({ message: `propertyType must be one of: ${PROPERTY_TYPES.join(', ')}` });
     }
+    if (availabilityStatus !== undefined && !AVAILABILITY_STATUSES.includes(availabilityStatus)) {
+      return res.status(400).json({ message: `availabilityStatus must be one of: ${AVAILABILITY_STATUSES.join(', ')}` });
+    }
+    if (price !== undefined && (!Number.isFinite(Number(price)) || Number(price) <= 0)) {
+      return res.status(400).json({ message: 'price must be a positive number' });
+    }
+    const cleanAmenities = normalizeAmenities(amenities);
+    if (cleanAmenities === null) {
+      return res.status(400).json({ message: 'amenities must be an array of strings' });
+    }
+
+    const coordsChanged = latitude != null && longitude != null;
+    if (coordsChanged && !validCoords(Number(latitude), Number(longitude))) {
+      return res.status(400).json({ message: 'latitude/longitude are invalid' });
+    }
+
+    // Resolve the school (new one if provided, else the stored one) so distance
+    // and driving time stay correct when the school or coordinates change.
+    let school = null;
+    if (schoolId !== undefined) {
+      if (!mongoose.isValidObjectId(schoolId)) return res.status(400).json({ message: 'Invalid schoolId' });
+      school = await School.findById(schoolId);
+      if (!school) return res.status(404).json({ message: 'School not found' });
+      property.schoolId = school._id;
+    } else if (coordsChanged && property.schoolId) {
+      school = await School.findById(property.schoolId);
+    }
 
     if (title !== undefined) property.title = title;
     if (propertyType !== undefined) property.propertyType = propertyType;
     if (description !== undefined) property.description = description;
-    if (price !== undefined) property.price = price;
+    if (price !== undefined) property.price = Number(price);
     if (additionalCharges !== undefined) property.additionalCharges = additionalCharges;
     if (photos !== undefined) property.photos = photos;
-    if (amenities !== undefined) property.amenities = amenities;
+    if (cleanAmenities !== undefined) property.amenities = cleanAmenities;
     if (address !== undefined) property.address = address;
     if (availabilityStatus !== undefined) property.availabilityStatus = availabilityStatus;
-    if (latitude != null && longitude != null) {
-      property.location = { type: 'Point', coordinates: [longitude, latitude] };
+    if (coordsChanged) {
+      property.location = { type: 'Point', coordinates: [Number(longitude), Number(latitude)] };
+    }
+    if (school) {
+      const [lng, lat] = property.location.coordinates;
+      Object.assign(property, schoolMetrics(school, lng, lat));
     }
 
-    // Edits to listing details send a verified listing back to pending for
-    // re-review. Changing only availability (e.g. marking it booked) does not.
+    // Edits to listing details send a verified OR rejected listing back to
+    // pending for (re-)review. Changing only availability (e.g. marking it
+    // booked) does not.
     const detailsChanged = [
-      title, description, price, additionalCharges, photos, amenities, address, latitude, longitude, propertyType,
+      title, description, price, additionalCharges, photos, amenities, address,
+      latitude, longitude, propertyType, schoolId,
     ].some((v) => v !== undefined);
-    if (detailsChanged && property.verificationStatus === 'verified') {
+    if (detailsChanged && ['verified', 'rejected'].includes(property.verificationStatus)) {
       property.verificationStatus = 'pending';
     }
 

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../model/collectionsModel');
+const { User, StudentProfile } = require('../model/collectionsModel');
 
 // Verifies the JWT on the request and attaches the user to req.user.
 // Use on any route that requires a logged-in user.
@@ -36,6 +36,27 @@ function authorize(...allowedRoles) {
   };
 }
 
+// Restricts a route to students whose account has been verified by an admin.
+// Use AFTER protect + authorize('student'). Attaches req.studentProfile.
+async function requireVerifiedStudent(req, res, next) {
+  try {
+    const profile = await StudentProfile.findOne({ userId: req.user._id });
+    if (!profile) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
+    if (profile.verificationStatus !== 'verified') {
+      return res.status(403).json({
+        message: 'Student verification required',
+        verificationStatus: profile.verificationStatus,
+      });
+    }
+    req.studentProfile = profile;
+    next();
+  } catch (err) {
+    return res.status(500).json({ message: 'Verification check failed', error: err.message });
+  }
+}
+
 async function optionalProtect(req, res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -56,4 +77,4 @@ async function optionalProtect(req, res, next) {
     next();
   }
 }
-module.exports = { protect, authorize, optionalProtect };
+module.exports = { protect, authorize, optionalProtect, requireVerifiedStudent };

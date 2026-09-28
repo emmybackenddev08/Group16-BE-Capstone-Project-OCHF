@@ -132,7 +132,12 @@ const propertySchema = new Schema(
     photos: [photoSchema],
     address: { type: String, required: true },
     location: { type: pointSchema, required: true }, // GeoJSON Point,
-    amenities: { type:String, default:[]},
+    amenities: { type: [String], default: [] }, // was String — arrays failed to cast
+    // US-14: school the listing is measured from. Distance/driving time are
+    // computed by the server at create/update time (see propertyController).
+    schoolId: { type: Schema.Types.ObjectId, ref: 'School' },
+    distanceFromSchoolKm: Number,
+    drivingTimeMinutes: Number,
     propertyType: { type: [String], enum: ['room', 'self_contain', 'shared', 'apartment', 'hostel'] },
     availabilityStatus: {
       type: String,
@@ -151,6 +156,7 @@ propertySchema.index({ location: '2dsphere' });
 propertySchema.index({ verificationStatus: 1, availabilityStatus: 1 });
 propertySchema.index({ price: 1 });
 propertySchema.index({ providerId: 1 });
+propertySchema.index({ schoolId: 1 });
 propertySchema.index({ title: 'text', description: 'text' }); // keyword search
 
 // ------------------------------------------------------------

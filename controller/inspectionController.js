@@ -14,6 +14,13 @@ async function requestInspection(req, res) {
   try {
     const student = await getStudentProfile(req.user._id);
     if (!student) return res.status(404).json({ message: 'Student profile not found' });
+    // US-11: only verified students can act on protected listing info
+    if (student.verificationStatus !== 'verified') {
+      return res.status(403).json({
+        message: 'Student verification required',
+        verificationStatus: student.verificationStatus,
+      });
+    }
 
     const { propertyId } = req.body;
     if (!propertyId) return res.status(400).json({ message: 'propertyId is required' });
@@ -31,7 +38,7 @@ async function requestInspection(req, res) {
     const existing = await Inspection.findOne({
       propertyId,
       studentId: student._id,
-      status: { $in: ['requested', 'scheduled'] },
+      status: { $in: ['requested', 'confirmed', 'rescheduled'] }, // 'scheduled' is not a valid status in the model
     });
     if (existing) {
       return res.status(409).json({ message: 'You already have an open request for this property' });
