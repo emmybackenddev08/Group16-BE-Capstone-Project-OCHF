@@ -9,6 +9,7 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const slotRoutes = require('./routes/slotRoutes');
 
 const app = express();
 app.use(express.json());
@@ -20,6 +21,7 @@ app.use('/transactions', transactionRoutes);
 app.use('/admin', adminRoutes);
 app.use('/reviews', reviewRoutes);
 app.use('/reports', reportRoutes);
+app.use('/slots', slotRoutes);
 
 const PORT = process.env.PORT || 5000;
 

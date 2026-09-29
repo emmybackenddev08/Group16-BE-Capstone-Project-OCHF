@@ -247,6 +247,50 @@ reportSchema.pre('validate', function (next) {
 });
 
 // ------------------------------------------------------------
+// 10. SLOT  (US-18: bookable inspection slots)
+// The provider enters availability windows; the server splits them into
+// fixed-length slots. A slot is 'open' until a student books it (US-19/20
+// fill bookedBy + inspectionId and flip status to 'booked').
+// ------------------------------------------------------------
+const slotSchema = new Schema(
+  {
+    propertyId: { type: Schema.Types.ObjectId, ref: 'Property', required: true },
+    providerId: { type: Schema.Types.ObjectId, ref: 'ProviderProfile', required: true },
+    startsAt: { type: Date, required: true },
+    endsAt: { type: Date, required: true },
+    status: { type: String, enum: ['open', 'booked'], default: 'open' },
+    bookedBy: { type: Schema.Types.ObjectId, ref: 'StudentProfile' }, // set by US-19/20
+    inspectionId: { type: Schema.Types.ObjectId, ref: 'Inspection' }, // set by US-19/20
+  },
+  { timestamps: true }
+);
+slotSchema.index({ propertyId: 1, startsAt: 1 }, { unique: true }); // no duplicate slot starts per property
+slotSchema.index({ status: 1, startsAt: 1 });
+slotSchema.index({ providerId: 1, startsAt: 1 });
+
+// ------------------------------------------------------------
+// 11. OTP  (US-09: student email verification codes)
+// One live code per user. Only a hash of the code is stored.
+// codeExpiresAt = when the code stops working (10 min).
+// purgeAt = when Mongo deletes the whole document (TTL) — kept longer than
+// the code so the hourly resend cap survives a code expiring.
+// ------------------------------------------------------------
+const otpSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+    codeHash: { type: String, required: true },
+    codeExpiresAt: { type: Date, required: true },
+    attempts: { type: Number, default: 0 },
+    lastSentAt: { type: Date, required: true },
+    sendCount: { type: Number, default: 1 },
+    windowStartedAt: { type: Date, required: true },
+    purgeAt: { type: Date, required: true },
+  },
+  { timestamps: true }
+);
+otpSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
+
+// ------------------------------------------------------------
 // EXPORT MODELS
 // ------------------------------------------------------------
 module.exports = {
@@ -259,4 +303,6 @@ module.exports = {
   Transaction: mongoose.model('Transaction', transactionSchema),
   Review: mongoose.model('Review', reviewSchema),
   Report: mongoose.model('Report', reportSchema),
+  Slot: mongoose.model('Slot', slotSchema),
+  Otp: mongoose.model('Otp', otpSchema),
 };
