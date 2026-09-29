@@ -41,6 +41,8 @@ const userSchema = new Schema(
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ['student', 'provider', 'admin'], required: true },
     isActive: { type: Boolean, default: true },
+    emailVerified: { type: Boolean, default: false }, // US-09: set by a correct OTP
+    emailVerifiedAt: Date,
   },
   { timestamps: true }
 );
@@ -178,6 +180,8 @@ const inspectionSchema = new Schema(
     },
     requestedAt: { type: Date, default: Date.now },
     scheduledAt: Date,
+    slotId: { type: Schema.Types.ObjectId, ref: 'Slot' },   // US-19/20: the slot this booking holds
+    reminderSentAt: { type: Date, default: null },          // US-21: set once the reminder goes out
     completedAt: Date,
     declineReason: String,   // set if a provider declines the request outright
     rejectionReason: String, // set if the student rejects the property after inspection
@@ -291,6 +295,27 @@ const otpSchema = new Schema(
 otpSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0 });
 
 // ------------------------------------------------------------
+// 12. NOTIFICATION  (US-31: in-app copy of every emailed notification)
+// dedupeKey (optional, unique) stops a retried send from creating a
+// second in-app record for the same event.
+// ------------------------------------------------------------
+const notificationSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    type: { type: String, required: true },
+    title: { type: String, required: true },
+    body: { type: String, default: '' },
+    data: Schema.Types.Mixed, // e.g. { inspectionId, propertyId }
+    readAt: Date,
+    dedupeKey: String,
+  },
+  { timestamps: true }
+);
+notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, readAt: 1 });
+notificationSchema.index({ dedupeKey: 1 }, { unique: true, sparse: true });
+
+// ------------------------------------------------------------
 // EXPORT MODELS
 // ------------------------------------------------------------
 module.exports = {
@@ -305,4 +330,5 @@ module.exports = {
   Report: mongoose.model('Report', reportSchema),
   Slot: mongoose.model('Slot', slotSchema),
   Otp: mongoose.model('Otp', otpSchema),
+  Notification: mongoose.model('Notification', notificationSchema),
 };

@@ -10,6 +10,8 @@ const adminRoutes = require('./routes/adminRoutes');
 const reviewRoutes = require('./routes/reviewRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const slotRoutes = require('./routes/slotRoutes');
+const mailerRoutes = require('./routes/mailerRoutes');
+const { startReminderJob } = require('./utils/reminders');
 
 const app = express();
 app.use(express.json());
@@ -22,6 +24,7 @@ app.use('/admin', adminRoutes);
 app.use('/reviews', reviewRoutes);
 app.use('/reports', reportRoutes);
 app.use('/slots', slotRoutes);
+app.use('/notifications', mailerRoutes);
 
 const PORT = process.env.PORT || 5000;
 
@@ -29,6 +32,7 @@ mongoose
   .connect(process.env.MONGOATLAS_URI)
   .then(() => {
     console.log('MongoDB connected');
+    startReminderJob();
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
   .catch((err) => {

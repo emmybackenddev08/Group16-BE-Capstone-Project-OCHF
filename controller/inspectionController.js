@@ -1,4 +1,6 @@
-const { Inspection, Property, StudentProfile, ProviderProfile, Transaction } = require('../model/collectionsModel');
+const mongoose = require('mongoose');
+const { Inspection, Property, StudentProfile, ProviderProfile, Transaction, Slot } = require('../model/collectionsModel');
+const { notifyInspection } = require('../utils/notify');
 
 async function getStudentProfile(userId) {
   return StudentProfile.findOne({ userId });
@@ -7,10 +9,21 @@ async function getProviderProfile(userId) {
   return ProviderProfile.findOne({ userId });
 }
 
-// POST /inspections  (student only)  body: { propertyId }
-// Property must be verified + available — mirrors the journey's
-// "check verification status" step before a request can be made.
+// Puts a booked slot back on the market.
+async function releaseSlot(slotId) {
+  if (!slotId) return;
+  await Slot.updateOne(
+    { _id: slotId },
+    { $set: { status: 'open' }, $unset: { bookedBy: '', inspectionId: '' } }
+  );
+}
+
+// POST /inspections  (verified student only)  body: { propertyId, slotId }
+// US-19 + US-20: the student picks an open slot and the booking is CONFIRMED
+// automatically - the landlord does not approve it. The slot is claimed with
+// one atomic update, so two students can never book the same slot.
 async function requestInspection(req, res) {
+  let claimedSlot = null;
   try {
     const student = await getStudentProfile(req.user._id);
     if (!student) return res.status(404).json({ message: 'Student profile not found' });
@@ -22,8 +35,13 @@ async function requestInspection(req, res) {
       });
     }
 
-    const { propertyId } = req.body;
-    if (!propertyId) return res.status(400).json({ message: 'propertyId is required' });
+    const { propertyId, slotId } = req.body;
+    if (!propertyId || !mongoose.isValidObjectId(propertyId)) {
+      return res.status(400).json({ message: 'A valid propertyId is required' });
+    }
+    if (!slotId || !mongoose.isValidObjectId(slotId)) {
+      return res.status(400).json({ message: 'A valid slotId is required' });
+    }
 
     const property = await Property.findById(propertyId);
     if (!property) return res.status(404).json({ message: 'Property not found' });
@@ -34,20 +52,46 @@ async function requestInspection(req, res) {
       return res.status(400).json({ message: 'Property is not available' });
     }
 
-    // Block duplicate open requests for the same property by the same student
+    // Block duplicate open bookings for the same property by the same student
     const existing = await Inspection.findOne({
       propertyId,
       studentId: student._id,
-      status: { $in: ['requested', 'confirmed', 'rescheduled'] }, // 'scheduled' is not a valid status in the model
+      status: { $in: ['requested', 'confirmed', 'rescheduled'] },
     });
     if (existing) {
-      return res.status(409).json({ message: 'You already have an open request for this property' });
+      return res.status(409).json({ message: 'You already have an open booking for this property' });
     }
 
-    const inspection = await Inspection.create({ propertyId, studentId: student._id });
-    return res.status(201).json({ inspection });
+    // Atomic claim: succeeds only if the slot is still open, in the future,
+    // and belongs to this property.
+    claimedSlot = await Slot.findOneAndUpdate(
+      { _id: slotId, propertyId: property._id, status: 'open', startsAt: { $gt: new Date() } },
+      { $set: { status: 'booked', bookedBy: student._id } },
+      { new: true }
+    );
+    if (!claimedSlot) {
+      return res.status(409).json({ message: 'That slot is no longer available. Please pick another.' });
+    }
+
+    const inspection = await Inspection.create({
+      propertyId,
+      studentId: student._id,
+      slotId: claimedSlot._id,
+      scheduledAt: claimedSlot.startsAt,
+      status: 'confirmed',
+    });
+
+    claimedSlot.inspectionId = inspection._id;
+    await claimedSlot.save();
+
+    // Booking confirmation to student + landlord (never blocks the response)
+    notifyInspection(inspection, 'booking_confirmed');
+
+    return res.status(201).json({ inspection, slot: claimedSlot });
   } catch (err) {
-    return res.status(500).json({ message: 'Failed to request inspection', error: err.message });
+    // Roll the slot back if we claimed it but failed afterwards.
+    if (claimedSlot) await releaseSlot(claimedSlot._id).catch(() => {});
+    return res.status(500).json({ message: 'Failed to book inspection', error: err.message });
   }
 }
 
@@ -157,8 +201,9 @@ async function declineInspection(req, res) {
   }
 }
 
-// PUT /inspections/:id/reschedule  (provider, owner only)  body: { scheduledAt }
-// Changes the date on an already-confirmed (or previously rescheduled) inspection.
+// PUT /inspections/:id/reschedule  (provider, owner only)
+// Slot-based bookings: body { slotId } = a NEW open slot for the same property
+// (the old slot is released). Legacy bookings without a slot: body { scheduledAt }.
 async function rescheduleInspection(req, res) {
   try {
     const inspection = await Inspection.findById(req.params.id).populate('propertyId');
@@ -174,12 +219,35 @@ async function rescheduleInspection(req, res) {
       });
     }
 
-    const { scheduledAt } = req.body;
-    if (!scheduledAt) return res.status(400).json({ message: 'scheduledAt is required' });
+    const { slotId, scheduledAt } = req.body;
 
-    inspection.scheduledAt = scheduledAt;
+    if (inspection.slotId) {
+      if (!slotId || !mongoose.isValidObjectId(slotId)) {
+        return res.status(400).json({ message: 'slotId of a new open slot is required' });
+      }
+      if (String(slotId) === String(inspection.slotId)) {
+        return res.status(400).json({ message: 'Pick a different slot' });
+      }
+      const newSlot = await Slot.findOneAndUpdate(
+        { _id: slotId, propertyId: inspection.propertyId._id, status: 'open', startsAt: { $gt: new Date() } },
+        { $set: { status: 'booked', bookedBy: inspection.studentId, inspectionId: inspection._id } },
+        { new: true }
+      );
+      if (!newSlot) return res.status(409).json({ message: 'That slot is no longer available' });
+
+      await releaseSlot(inspection.slotId);
+      inspection.slotId = newSlot._id;
+      inspection.scheduledAt = newSlot.startsAt;
+    } else {
+      if (!scheduledAt) return res.status(400).json({ message: 'scheduledAt is required' });
+      inspection.scheduledAt = scheduledAt;
+    }
+
     inspection.status = 'rescheduled';
+    inspection.reminderSentAt = null; // new time -> new reminder
     await inspection.save();
+
+    notifyInspection(inspection, 'inspection_rescheduled');
     return res.json({ inspection });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to reschedule inspection', error: err.message });
@@ -287,7 +355,8 @@ async function decideInspection(req, res) {
   }
 }
 
-// DELETE /inspections/:id  (student only) — cancel before it's completed
+// DELETE /inspections/:id  (student only) - cancel before it's completed.
+// Frees the booked slot so another student can take it.
 async function cancelInspection(req, res) {
   try {
     const inspection = await Inspection.findById(req.params.id);
@@ -303,6 +372,9 @@ async function cancelInspection(req, res) {
 
     inspection.status = 'cancelled';
     await inspection.save();
+    await releaseSlot(inspection.slotId);
+
+    notifyInspection(inspection, 'inspection_cancelled');
     return res.json({ inspection });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to cancel inspection', error: err.message });

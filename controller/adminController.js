@@ -1,5 +1,7 @@
 const { StudentProfile, ProviderProfile, Property, Inspection, Report } = require('../model/collectionsModel');
 
+const { notifyUser, notifyPropertyOwner } = require('../utils/notify');
+
 const VALID_REVIEW_STATUSES = ['verified', 'rejected'];
 
 // GET /admin/students?status=pending  (default: pending; pass status=all for everything)
@@ -26,6 +28,7 @@ async function reviewStudent(req, res) {
 
     student.verificationStatus = status;
     await student.save();
+    notifyUser(student.userId, status === 'verified' ? 'account_verified' : 'account_rejected', { reason: req.body.reason });
     return res.json({ student });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to update verification', error: err.message });
@@ -56,6 +59,7 @@ async function reviewProvider(req, res) {
 
     provider.verificationStatus = status;
     await provider.save();
+    notifyUser(provider.userId, status === 'verified' ? 'account_verified' : 'account_rejected', { reason: req.body.reason });
     return res.json({ provider });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to update verification', error: err.message });
@@ -86,6 +90,8 @@ async function reviewProperty(req, res) {
 
     property.verificationStatus = status;
     await property.save();
+    // 'rejected' = the landlord must correct the listing (body.reason says what)
+    notifyPropertyOwner(property, status === 'verified' ? 'property_verified' : 'property_correction', { reason: req.body.reason });
     return res.json({ property });
   } catch (err) {
     return res.status(500).json({ message: 'Failed to update verification', error: err.message });
