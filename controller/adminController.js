@@ -1,8 +1,102 @@
-const { StudentProfile, ProviderProfile, Property, Inspection, Report } = require('../model/collectionsModel');
+const { User, StudentProfile, ProviderProfile, Property, Inspection, Report } = require('../model/collectionsModel');
 
 const { notifyUser, notifyPropertyOwner } = require('../utils/notify');
 
 const VALID_REVIEW_STATUSES = ['verified', 'rejected'];
+
+// ------------------------------------------------------------
+// US-28 — User Management
+// ------------------------------------------------------------
+
+// GET /admin/users?role=student&status=active&q=jane
+// Lists every user with their linked profile's verification status folded
+// in, so the admin doesn't have to cross-reference /admin/students and
+// /admin/providers separately. Supports optional filtering/search.
+//   role   - 'student' | 'provider' | 'admin' (omit for all roles)
+//   status - 'active' | 'suspended' (omit for all)
+//   q      - case-insensitive match against email
+async function getAllUsers(req, res) {
+  try {
+    const { role, status, q } = req.query;
+
+    const filter = {};
+    if (role) {
+      if (!['student', 'provider', 'admin'].includes(role)) {
+        return res.status(400).json({ message: 'role must be student, provider or admin' });
+      }
+      filter.role = role;
+    }
+    if (status) {
+      if (!['active', 'suspended'].includes(status)) {
+        return res.status(400).json({ message: 'status must be active or suspended' });
+      }
+      filter.isActive = status === 'active';
+    }
+    if (q) {
+      filter.email = { $regex: String(q).trim(), $options: 'i' };
+    }
+
+    const users = await User.find(filter).select('-passwordHash').sort({ createdAt: -1 });
+
+    // Attach each user's student/provider profile (name + verification
+    // status) in two batched queries instead of one query per user.
+    const userIds = users.map((u) => u._id);
+    const [students, providers] = await Promise.all([
+      StudentProfile.find({ userId: { $in: userIds } }).select('userId fullName verificationStatus'),
+      ProviderProfile.find({ userId: { $in: userIds } }).select('userId businessName verificationStatus'),
+    ]);
+    const studentByUser = new Map(students.map((s) => [String(s.userId), s]));
+    const providerByUser = new Map(providers.map((p) => [String(p.userId), p]));
+
+    const out = users.map((u) => {
+      const profile = studentByUser.get(String(u._id)) || providerByUser.get(String(u._id)) || null;
+      return {
+        id: u._id,
+        email: u.email,
+        role: u.role,
+        isActive: u.isActive,
+        createdAt: u.createdAt,
+        name: profile ? profile.fullName || profile.businessName || null : null,
+        verificationStatus: profile ? profile.verificationStatus : null,
+      };
+    });
+
+    return res.json({ users: out });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to fetch users', error: err.message });
+  }
+}
+
+// PUT /admin/users/:id/status  body: { status: 'active' | 'suspended', reason? }
+// Suspending sets isActive: false, which `protect` middleware already
+// checks on every request — a suspended user is logged out immediately,
+// not just blocked from new logins.
+async function updateUserStatus(req, res) {
+  try {
+    const { status, reason } = req.body;
+    if (!['active', 'suspended'].includes(status)) {
+      return res.status(400).json({ message: 'status must be active or suspended' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    if (user.role === 'admin' && String(user._id) === String(req.user._id)) {
+      return res.status(400).json({ message: 'You cannot change your own account status' });
+    }
+
+    user.isActive = status === 'active';
+    await user.save();
+
+    notifyUser(user._id, status === 'active' ? 'account_reactivated' : 'account_suspended', { reason });
+
+    return res.json({
+      user: { id: user._id, email: user.email, role: user.role, isActive: user.isActive },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to update user status', error: err.message });
+  }
+}
 
 // GET /admin/students?status=pending  (default: pending; pass status=all for everything)
 async function getStudentVerifications(req, res) {
@@ -148,6 +242,8 @@ async function updateReportStatus(req, res) {
 }
 
 module.exports = {
+  getAllUsers,
+  updateUserStatus,
   getStudentVerifications,
   reviewStudent,
   getProviderVerifications,

@@ -54,6 +54,15 @@ const templates = {
     subject: 'Inspection rescheduled',
     text: `${propLine(property)}New time: ${fmt(scheduledAt)}`,
   }),
+  // US-28 — admin suspends/reactivates a user account
+  account_suspended: ({ reason }) => ({
+    subject: 'Your account has been suspended',
+    text: `Your account has been suspended by an administrator.${reason ? `\nReason: ${reason}` : ''}\nContact support if you believe this is a mistake.`,
+  }),
+  account_reactivated: () => ({
+    subject: 'Your account has been reactivated',
+    text: 'Your account has been reactivated. You can log in and use the platform as normal.',
+  }),
   platform_update: ({ title, body }) => ({
     subject: title || 'Platform update',
     text: body || '',
