@@ -12,6 +12,7 @@ const reportRoutes = require('./routes/reportRoutes');
 const slotRoutes = require('./routes/slotRoutes');
 const mailerRoutes = require('./routes/mailerRoutes');
 const schoolRoutes = require('./routes/schoolRoutes');
+const otpRoutes = require('./routes/otpRoutes')
 const { startReminderJob } = require('./utils/reminders');
 
 const app = express();
@@ -27,8 +28,9 @@ app.use('/reports', reportRoutes);
 app.use('/slots', slotRoutes);
 app.use('/notifications', mailerRoutes);
 app.use('/schools', schoolRoutes);
+app.use('/auth/otp', otpRoutes);
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 2008;
 
 mongoose
   .connect(process.env.MONGOATLAS_URI)

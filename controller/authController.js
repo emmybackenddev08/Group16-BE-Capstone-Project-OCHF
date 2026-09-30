@@ -80,9 +80,14 @@ async function register(req, res) {
       token,
       user: { id: user._id, email: user.email, role: user.role },
       verificationStatus: profile.verificationStatus, // 'pending' for every new profile
-      // Tells the client where to send the user next.
-      // NOTE: student OTP endpoints (US-09) are not part of these files yet.
-      nextStep: role === 'student' ? 'otp_verification' : 'property_submission',
+      // Both roles must verify their email before they can log in — the
+      // client should call POST /auth/otp/send with this token right after
+      // registering (see otpController.js). Registration itself does not
+      // send the first code automatically. A provider proceeds to property
+      // submission only AFTER verifying (see nextStep from /auth/otp/verify
+      // handling on the client, or just route to 'property_submission' once
+      // GET /auth/me shows emailVerified: true).
+      nextStep: 'otp_verification',
     });
   } catch (err) {
     // Roll back the half-created account so the email isn't locked out.
@@ -110,11 +115,27 @@ async function login(req, res) {
       return res.status(403).json({ message: 'Account is deactivated' });
     }
 
+    // US-09: students AND providers must verify their email via OTP before
+    // they can log in. Admins have no OTP step. We still hand back a token
+    // here — not a real session, but enough for the frontend to call
+    // POST /auth/otp/send (or /resend) and /auth/otp/verify, which both
+    // require `protect`. Without this, anyone who closed the tab after
+    // registering without verifying would have no way to ever get a token
+    // again and would be locked out permanently.
+    if (['student', 'provider'].includes(user.role) && !user.emailVerified) {
+      const otpToken = generateToken(user._id, user.role);
+      return res.status(403).json({
+        message: 'Please verify your email before logging in',
+        emailVerified: false,
+        otpToken, // use only with /auth/otp/send, /auth/otp/resend, /auth/otp/verify
+      });
+    }
+
     const profile = await getProfileForUser(user);
     const token = generateToken(user._id, user.role);
     return res.json({
       token,
-      user: { id: user._id, email: user.email, role: user.role },
+      user: { id: user._id, email: user.email, role: user.role, emailVerified: user.emailVerified },
       verificationStatus: profile ? profile.verificationStatus : null,
     });
   } catch (err) {
@@ -138,17 +159,10 @@ async function me(req, res) {
   }
 }
 
-// DELETE /auth/me  (protected — requires the `protect` middleware first)
-// body: { password }
+// DELETE /auth/me  (protected)  body: { password }
 // Deletes the logged-in user's own account. Requires the current password
-// as confirmation — a valid token alone isn't enough for something this
-// irreversible (e.g. a stolen/leaked token, or a stale session on a shared
-// device, shouldn't be able to delete the account by itself).
-// Also removes the linked StudentProfile/ProviderProfile so no orphaned
-// profile is left behind. This does NOT touch the user's properties,
-// inspections, reviews, etc. — those stay in place for data integrity
-// (a landlord's listings, a student's booking history) unless you want
-// a harder cascade.
+// as confirmation — a valid token alone shouldn't be enough for something
+// this irreversible. Also removes the linked profile so nothing is orphaned.
 async function deleteAccount(req, res) {
   try {
     const { password } = req.body;
@@ -156,8 +170,6 @@ async function deleteAccount(req, res) {
       return res.status(400).json({ message: 'password is required to confirm account deletion' });
     }
 
-    // Re-fetch with the password hash — req.user (from `protect`) has it
-    // stripped via .select('-passwordHash').
     const user = await User.findById(req.user._id);
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ message: 'Incorrect password' });
@@ -168,7 +180,6 @@ async function deleteAccount(req, res) {
     } else if (user.role === 'provider') {
       await ProviderProfile.deleteOne({ userId: user._id });
     }
-
     await user.deleteOne();
 
     return res.json({ message: 'Account deleted' });
