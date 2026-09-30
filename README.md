@@ -243,6 +243,13 @@ Configure the following variables:
    # Edit .env with your MongoDB Atlas URI and JWT_SECRET
    ```
 
+4. Seed the default administrator account & tertiary campuses:
+   ```bash
+   npm run seed:admin
+   npm run seed:schools
+   ```
+   *Creates the default admin user (`admin@ochf.com` / `AdminPassword123!`) and populates initial tertiary institutions (UNILAG, YABATECH, LASU, UI, OAU, FUTA) with GeoJSON coordinates for distance calculations.*
+
 ### Running the Application
 
 - **Production / Standard Mode**:
@@ -435,6 +442,16 @@ Authorization: Bearer <your_jwt_token>
 | :--- | :--- | :--- | :--- |
 | `POST` | `/notifications/test` | Admin | Validate SMTP outbound configuration |
 | `POST` | `/notifications/announce` | Admin | Dispatch targeted system announcement |
+
+---
+
+### 10. Schools & Campuses (`/schools`)
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/schools` | Public | List all registered tertiary campuses (supports `?q=` search) |
+| `GET` | `/schools/:id` | Public | Get single campus details and GeoJSON coordinates |
+| `POST` | `/schools` | Admin | Register a new school/campus with coordinates |
 
 ---
 

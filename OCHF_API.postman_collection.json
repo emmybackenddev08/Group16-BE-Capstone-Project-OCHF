@@ -28,7 +28,7 @@
     },
     {
       "key": "schoolId",
-      "value": "651f8a84c2f42a1234567890",
+      "value": "6abd1e647434ce241906fe26",
       "type": "string"
     },
     {
@@ -1923,6 +1923,140 @@
               ]
             },
             "description": "Send direct in-app and email announcement to a specific user."
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Schools & Campuses",
+      "description": "Public endpoints to list and view tertiary institutions (used as proximity anchors for hostel listings), plus admin creation of new campuses.",
+      "item": [
+        {
+          "name": "Get All Schools (Public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var data = pm.response.json();",
+                  "    pm.test(\"Status code is 200\", function () {",
+                  "        pm.response.to.have.status(200);",
+                  "    });",
+                  "    if (data.schools && data.schools.length > 0) {",
+                  "        pm.collectionVariables.set(\"schoolId\", data.schools[0]._id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/schools?q=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schools"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "Optional search keyword (e.g. unilag, yaba, ibadan)"
+                }
+              ]
+            },
+            "description": "Fetch all registered tertiary institutions. Automatically sets {{schoolId}} to the first returned campus."
+          }
+        },
+        {
+          "name": "Get School by ID (Public)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"School has location coordinates\", function () {",
+                  "    var data = pm.response.json();",
+                  "    pm.expect(data.school).to.have.property(\"location\");",
+                  "    pm.expect(data.school.location.coordinates).to.be.an(\"array\").with.lengthOf(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/schools/{{schoolId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schools",
+                "{{schoolId}}"
+              ]
+            },
+            "description": "Fetch details, name, and GeoJSON coordinates for a specific school using {{schoolId}}."
+          }
+        },
+        {
+          "name": "Create School (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    pm.test(\"Status code is 201\", function () {",
+                  "        pm.response.to.have.status(201);",
+                  "    });",
+                  "    if (data.school && data.school._id) {",
+                  "        pm.collectionVariables.set(\"schoolId\", data.school._id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Covenant University (CU)\",\n  \"latitude\": 6.6718,\n  \"longitude\": 3.1581\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/schools",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "schools"
+              ]
+            },
+            "description": "Admin registers a new tertiary campus with geographical latitude & longitude. Automatically saves the created school ID to {{schoolId}}."
           }
         }
       ]
