@@ -1,12 +1,33 @@
 {
-  "dependencies": {
-    "bcrypt": "^6.0.0",
-    "cloudinary": "^2.11.0",
-    "dotenv": "^18.0.3",
-    "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.10.1",
-    "multer": "^2.3.0",
-    "nodemailer": "^10.0.12"
-  }
+    "name": "group16-be-capstone-project-ochf",
+    "version": "1.0.0",
+    "description": "",
+    "main": "server.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "start": "node server.js",
+        "dev": "node server.js"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/emmybackenddev08/Group16-BE-Capstone-Project-OCHF.git"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "commonjs",
+    "bugs": {
+        "url": "https://github.com/emmybackenddev08/Group16-BE-Capstone-Project-OCHF/issues"
+    },
+    "homepage": "https://github.com/emmybackenddev08/Group16-BE-Capstone-Project-OCHF#readme",
+    "dependencies": {
+        "bcrypt": "^6.0.0",
+        "cloudinary": "^2.11.0",
+        "dotenv": "^18.0.3",
+        "express": "^5.2.1",
+        "jsonwebtoken": "^9.0.3",
+        "mongoose": "^9.10.1",
+        "multer": "^2.3.0",
+        "nodemailer": "^10.0.12"
+    }
 }
