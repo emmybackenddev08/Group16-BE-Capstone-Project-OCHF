@@ -266,6 +266,10 @@ All requests and responses use JSON. For protected routes, provide the JWT in th
 Authorization: Bearer <your_jwt_token>
 ```
 
+> [!TIP]
+> **Postman Collection Available**: A pre-configured Postman collection with all 55 endpoints, sample payloads, and auto-token test scripts is provided in the repository root: [`OCHF_API.postman_collection.json`](./OCHF_API.postman_collection.json). Simply import this file into Postman to start testing immediately!
+
+
 ### 1. Authentication & Verification (`/auth`)
 
 | Method | Endpoint | Access | Description |
