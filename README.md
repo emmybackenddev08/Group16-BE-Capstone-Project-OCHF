@@ -243,6 +243,12 @@ Configure the following variables:
    # Edit .env with your MongoDB Atlas URI and JWT_SECRET
    ```
 
+4. Seed the default administrator account:
+   ```bash
+   npm run seed:admin
+   ```
+   *Creates the default admin user (`admin@ochf.com` / `AdminPassword123!`) so you can access the `/admin` endpoints immediately.*
+
 ### Running the Application
 
 - **Production / Standard Mode**:
