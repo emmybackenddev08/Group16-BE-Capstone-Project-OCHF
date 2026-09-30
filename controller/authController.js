@@ -138,4 +138,43 @@ async function me(req, res) {
   }
 }
 
-module.exports = { register, login, me };
+// DELETE /auth/me  (protected — requires the `protect` middleware first)
+// body: { password }
+// Deletes the logged-in user's own account. Requires the current password
+// as confirmation — a valid token alone isn't enough for something this
+// irreversible (e.g. a stolen/leaked token, or a stale session on a shared
+// device, shouldn't be able to delete the account by itself).
+// Also removes the linked StudentProfile/ProviderProfile so no orphaned
+// profile is left behind. This does NOT touch the user's properties,
+// inspections, reviews, etc. — those stay in place for data integrity
+// (a landlord's listings, a student's booking history) unless you want
+// a harder cascade.
+async function deleteAccount(req, res) {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ message: 'password is required to confirm account deletion' });
+    }
+
+    // Re-fetch with the password hash — req.user (from `protect`) has it
+    // stripped via .select('-passwordHash').
+    const user = await User.findById(req.user._id);
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ message: 'Incorrect password' });
+    }
+
+    if (user.role === 'student') {
+      await StudentProfile.deleteOne({ userId: user._id });
+    } else if (user.role === 'provider') {
+      await ProviderProfile.deleteOne({ userId: user._id });
+    }
+
+    await user.deleteOne();
+
+    return res.json({ message: 'Account deleted' });
+  } catch (err) {
+    return res.status(500).json({ message: 'Failed to delete account', error: err.message });
+  }
+}
+
+module.exports = { register, login, me, deleteAccount };
