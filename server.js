@@ -15,8 +15,8 @@ const schoolRoutes = require("./routes/schoolRoutes");
 const { startReminderJob } = require("./utils/reminders");
 
 const app = express();
-app.use(express.json());
 app.use(cors());
+app.use(express.json());
 app.use("/auth", authRoutes);
 app.use("/properties", propertyRoutes);
 app.use("/inspections", inspectionRoutes);
