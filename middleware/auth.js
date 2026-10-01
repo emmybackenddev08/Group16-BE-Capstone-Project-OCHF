@@ -18,12 +18,30 @@ async function protect(req, res, next) {
       return res.status(401).json({ message: 'User not found or inactive' });
     }
 
+// US-09: a student or provider whose email isn't verified yet may only
+    // reach self-service account routes — viewing/deleting their own
+    // account, and the OTP endpoints needed to complete verification (all
+    // mounted under /auth/*). Everything else (properties, inspections,
+    // admin, etc.) is blocked until emailVerified is true. Admins have no
+    // OTP step and are unaffected.
+    // NOTE: this is coupled to /auth/* being the actual mount prefix in
+    // server.js — if that prefix ever changes, update ALLOWED_PREFIX below.
+    const ALLOWED_PREFIX = '/auth/';
+    const isSelfServiceAuthRoute = req.originalUrl.startsWith(ALLOWED_PREFIX);
+    if (['student', 'provider'].includes(user.role) && !user.emailVerified && !isSelfServiceAuthRoute) {
+      return res.status(403).json({
+        message: 'Please verify your email before continuing',
+        emailVerified: false,
+      });
+    }
+
     req.user = user;
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Invalid or expired token' });
   }
 }
+
 
 // Restricts a route to specific roles. Use AFTER protect.
 // e.g. router.post('/properties', protect, authorize('provider'), createProperty)

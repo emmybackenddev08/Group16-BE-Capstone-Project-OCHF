@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { User, StudentProfile, Otp } = require('../model/collectionsModel');
+const { User, StudentProfile, ProviderProfile, Otp } = require('../model/collectionsModel');
 const { sendMail } = require('../utils/mailer');
 
 // ---- US-09 limits (MVP) ------------------------------------------------------
@@ -23,13 +23,23 @@ const hashCode = (userId, code) =>
 
 const secondsLeft = (ms) => Math.max(1, Math.ceil(ms / 1000));
 
-// POST /auth/otp/send  and  POST /auth/otp/resend  (student only)
+// Students and providers both verify by OTP now; admins never do.
+function profileModelForRole(role) {
+  if (role === 'student') return StudentProfile;
+  if (role === 'provider') return ProviderProfile;
+  return null;
+}
+
+// POST /auth/otp/send  and  POST /auth/otp/resend  (student or provider)
 // Emails a fresh 6-digit code. Enforces a resend cooldown and an hourly cap.
 async function sendOtp(req, res) {
   try {
     const user = req.user;
-    const profile = await StudentProfile.findOne({ userId: user._id });
-    if (!profile) return res.status(404).json({ message: 'Student profile not found' });
+    const ProfileModel = profileModelForRole(user.role);
+    if (!ProfileModel) return res.status(400).json({ message: 'This account type does not require OTP verification' });
+
+    const profile = await ProfileModel.findOne({ userId: user._id });
+    if (!profile) return res.status(404).json({ message: 'Profile not found' });
     if (user.emailVerified) return res.status(409).json({ message: 'Email is already verified' });
 
     const now = new Date();
@@ -96,10 +106,13 @@ async function sendOtp(req, res) {
   }
 }
 
-// POST /auth/otp/verify  (student only)  body: { code }
+// POST /auth/otp/verify  (student or provider)  body: { code }
 async function verifyOtp(req, res) {
   try {
     const user = req.user;
+    const ProfileModel = profileModelForRole(user.role);
+    if (!ProfileModel) return res.status(400).json({ message: 'This account type does not require OTP verification' });
+
     const code = String((req.body && req.body.code) || '').trim();
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ message: 'code must be 6 digits' });
     if (user.emailVerified) return res.status(409).json({ message: 'Email is already verified' });
@@ -127,19 +140,25 @@ async function verifyOtp(req, res) {
       return res.status(400).json({ message: 'Incorrect code', attemptsRemaining: Math.max(0, MAX_ATTEMPTS - otp.attempts) });
     }
 
-    // Success
+    // Success — email ownership is proven for either role.
     await Otp.deleteOne({ userId: user._id });
     await User.updateOne({ _id: user._id }, { $set: { emailVerified: true, emailVerifiedAt: new Date() } });
 
+    // AUTO_VERIFY is a student-only MVP shortcut: a correct OTP alone can
+    // flip a pending StudentProfile to 'verified', skipping admin review.
+    // Providers are NEVER auto-verified this way — a provider's listing
+    // legitimacy still requires admin document review (US-17), regardless
+    // of whether OTP_AUTO_VERIFY is on. Proving you own an inbox doesn't
+    // prove you're a real landlord.
     let profile = null;
-    if (AUTO_VERIFY) {
-      profile = await StudentProfile.findOneAndUpdate(
+    if (AUTO_VERIFY && user.role === 'student') {
+      profile = await ProfileModel.findOneAndUpdate(
         { userId: user._id, verificationStatus: 'pending' }, // never overrides 'rejected'
         { $set: { verificationStatus: 'verified' } },
         { new: true }
       );
     }
-    if (!profile) profile = await StudentProfile.findOne({ userId: user._id });
+    if (!profile) profile = await ProfileModel.findOne({ userId: user._id });
 
     return res.json({
       verified: true,
