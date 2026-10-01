@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
+const cors = require('cors');
 
 const authRoutes = require('./routes/authRoutes');
 const propertyRoutes = require('./routes/propertyRoutes');
@@ -16,6 +17,7 @@ const otpRoutes = require('./routes/otpRoutes')
 const { startReminderJob } = require('./utils/reminders');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 app.use('/auth', authRoutes);
