@@ -35,13 +35,13 @@ app.use('/auth/otp', otpRoutes);
 const PORT = process.env.PORT || 2008;
 
 mongoose
-  .connect(process.env.MONGOATLAS_URI)
-  .then(() => {
-    console.log('MongoDB connected');
-    startReminderJob();
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-  })
-  .catch((err) => {
-    console.error('MongoDB connection failed:', err.message);
-    process.exit(1);
-  });
+    .connect(process.env.MONGOATLAS_URI)
+    .then(() => {
+        console.log("MongoDB connected");
+        startReminderJob();
+        app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    })
+    .catch((err) => {
+        console.error("MongoDB connection failed:", err.message);
+        process.exit(1);
+    });
