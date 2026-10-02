@@ -38,6 +38,7 @@ mongoose
     .connect(process.env.MONGOATLAS_URI)
     .then(() => {
         console.log("MongoDB connected");
+        console.log(mongoose.connection.host, mongoose.connection.name);
         startReminderJob();
         app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
     })
@@ -45,3 +46,4 @@ mongoose
         console.error("MongoDB connection failed:", err.message);
         process.exit(1);
     });
+    
